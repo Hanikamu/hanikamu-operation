@@ -1,0 +1,71 @@
+name: ci
+
+on:
+  push:
+    paths:
+      - ".github/workflows/ci.yml"
+      - "lib/**"
+      - "*.gemspec"
+      - "spec/**"
+      - "Rakefile"
+      - "Gemfile"
+      - ".rubocop.yml"
+  pull_request:
+    branches:
+      - main
+  create:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        ruby:
+          - '3.4'
+          - '3.3'
+          - '3.2'
+        include:
+          - ruby: '3.4'
+            coverage: 'true'
+    
+    env:
+      COVERAGE: ${{ matrix.coverage }}
+      COVERAGE_TOKEN: ${{ secrets.CODACY_PROJECT_TOKEN }}
+      REDIS_URL: redis://localhost:6379/15
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          bundler-cache: true
+      
+      - name: Install latest bundler
+        run: |
+          gem install bundler --no-document
+          bundle config set without 'tools benchmarks docs'
+      
+      - name: Bundle install
+        run: bundle install --jobs 4 --retry 3
+      
+      - name: Run all tests
+        run: bundle exec rspec
+      
+      - name: Run rubocop
+        run: bundle exec rubocop
