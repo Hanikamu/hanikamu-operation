@@ -4,11 +4,14 @@ $LOAD_PATH.push File.expand_path("lib", __dir__)
 
 Gem::Specification.new do |spec|
   spec.name = "hanikamu-operation"
-  spec.version = "0.1.0"
+  spec.version = "0.1.1"
   spec.authors = ["Nicolai Seerup", "Alejandro Jimenez"]
 
   spec.summary = "Service objects with guards, distributed locks, and transactions"
-  spec.description = "Ruby gem for building robust service operations with guard validations, distributed mutex locks via Redlock, database transactions, and comprehensive error handling. Thread-safe and designed for production Rails applications."
+  spec.description = <<~DESC
+    Ruby gem for building robust service operations with guard validations, distributed mutex locks via Redlock,
+    database transactions, and comprehensive error handling. Thread-safe and designed for production Rails applications.
+  DESC
   spec.homepage = "https://github.com/Hanikamu/hanikamu-operation"
   spec.license = "MIT"
   spec.required_ruby_version = ">= 3.2.0"

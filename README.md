@@ -65,7 +65,7 @@ Use `Hanikamu::Operation` (instead of plain `Hanikamu::Service`) when your busin
 
 ```ruby
 # Gemfile
-gem 'hanikamu-operation', '~> 0.1.0'
+gem 'hanikamu-operation', '~> 0.1.1'
 ```
 
 ```bash
@@ -127,7 +127,7 @@ end
 Add to your application's Gemfile:
 
 ```ruby
-gem 'hanikamu-operation', '~> 0.1.0'
+gem 'hanikamu-operation', '~> 0.1.1'
 ```
 
 Then execute:
@@ -146,7 +146,7 @@ Follow these steps to integrate Hanikamu::Operation into a Rails application:
 
 ```ruby
 # Gemfile
-gem 'hanikamu-operation', '~> 0.1.0'
+gem 'hanikamu-operation', '~> 0.1.1'
 gem 'redis-client', '~> 0.22'  # Required for distributed locking
 ```
 
