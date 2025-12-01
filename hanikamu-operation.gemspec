@@ -39,8 +39,8 @@ Gem::Specification.new do |spec|
   spec.add_dependency "activerecord", ">= 6.0", "< 9.0"
   spec.add_dependency "activesupport", ">= 6.0", "< 9.0"
   spec.add_dependency "hanikamu-service", "~> 0.1"
+  spec.add_dependency "redis-client", "~> 0.22"
   spec.add_dependency "redlock", "~> 2.0"
-
   # For more information and examples about making a new gem, check out our
   # guide at: https://bundler.io/guides/creating_gem.html
 end
