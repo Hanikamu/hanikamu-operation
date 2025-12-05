@@ -4,7 +4,7 @@ $LOAD_PATH.push File.expand_path("lib", __dir__)
 
 Gem::Specification.new do |spec|
   spec.name = "hanikamu-operation"
-  spec.version = "0.1.1"
+  spec.version = "0.1.2"
   spec.authors = ["Nicolai Seerup", "Alejandro Jimenez"]
 
   spec.summary = "Service objects with guards, distributed locks, and transactions"
@@ -14,7 +14,7 @@ Gem::Specification.new do |spec|
   DESC
   spec.homepage = "https://github.com/Hanikamu/hanikamu-operation"
   spec.license = "MIT"
-  spec.required_ruby_version = ">= 3.2.0"
+  spec.required_ruby_version = ">= 3.4.0"
 
   spec.metadata["homepage_uri"] = spec.homepage
   spec.metadata["source_code_uri"] = "https://github.com/Hanikamu/hanikamu-operation"
@@ -39,7 +39,6 @@ Gem::Specification.new do |spec|
   spec.add_dependency "activerecord", ">= 6.0", "< 9.0"
   spec.add_dependency "activesupport", ">= 6.0", "< 9.0"
   spec.add_dependency "hanikamu-service", "~> 0.1"
-  spec.add_dependency "redis-client", "~> 0.22"
   spec.add_dependency "redlock", "~> 2.0"
   # For more information and examples about making a new gem, check out our
   # guide at: https://bundler.io/guides/creating_gem.html

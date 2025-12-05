@@ -8,9 +8,8 @@ A Ruby gem that extends [hanikamu-service](https://github.com/Hanikamu/hanikamu-
 
 1. [Why Hanikamu::Operation?](#why-hanikamuoperation)
 2. [Quick Start](#quick-start)
-3. [Installation](#installation)
-4. [Setup](#setup)
-5. [Usage](#usage)
+3. [Setup](#setup)
+4. [Usage](#usage)
    - [Basic Operation](#basic-operation)
    - [Distributed Locking](#distributed-locking-with-within_mutex)
    - [Database Transactions](#database-transactions-with-within_transaction)
@@ -18,14 +17,14 @@ A Ruby gem that extends [hanikamu-service](https://github.com/Hanikamu/hanikamu-
    - [Guard Conditions](#guard-conditions)
    - [Block Requirements](#block-requirements)
    - [Complete Example](#complete-example-combining-all-features)
-6. [Error Handling](#error-handling)
-7. [Best Practices](#best-practices)
-8. [Configuration Reference](#configuration-reference)
-9. [Testing](#testing)
-10. [Development](#development)
-11. [Contributing](#contributing)
-12. [License](#license)
-13. [Credits](#credits)
+5. [Error Handling](#error-handling)
+6. [Best Practices](#best-practices)
+7. [Configuration Reference](#configuration-reference)
+8. [Testing](#testing)
+9. [Development](#development)
+10. [Contributing](#contributing)
+11. [License](#license)
+12. [Credits](#credits)
 
 ## Why Hanikamu::Operation?
 
@@ -65,7 +64,7 @@ Use `Hanikamu::Operation` (instead of plain `Hanikamu::Service`) when your busin
 
 ```ruby
 # Gemfile
-gem 'hanikamu-operation', '~> 0.1.1'
+gem 'hanikamu-operation', '~> 0.1.2'
 ```
 
 ```bash
@@ -122,31 +121,19 @@ else
 end
 ```
 
-## Installation
-
-Add to your application's Gemfile:
-
-```ruby
-gem 'hanikamu-operation', '~> 0.1.1'
-```
-
-Then execute:
-
-```bash
-bundle install
-```
-
 ## Setup
 
-### Rails Application Setup Guide
+### Rails Application Setup
 
 Follow these steps to integrate Hanikamu::Operation into a Rails application:
 
 **Step 1: Add the gem to your Gemfile**
 
+Requires Ruby 3.4.0 or later.
+
 ```ruby
 # Gemfile
-gem 'hanikamu-operation', '~> 0.1.1'
+gem 'hanikamu-operation', '~> 0.1.2'
 gem 'redis-client', '~> 0.22'  # Required for distributed locking
 ```
 
@@ -214,68 +201,7 @@ brew services start redis
 REDIS_URL=redis://localhost:6379/0
 ```
 
-**Step 5: Create your first operation**
-
-```bash
-# Create operations directory
-mkdir -p app/operations/users
-```
-
-```ruby
-# app/operations/users/create_user_operation.rb
-module Users
-  class CreateUserOperation < Hanikamu::Operation
-    attribute :email, Types::String
-    attribute :password, Types::String
-
-    validates :email, presence: true, format: { with: URI::MailTo::EMAIL_REGEXP }
-    validates :password, length: { minimum: 8 }
-
-    within_transaction(:base)
-
-    def execute
-      user = User.create!(
-        email: email,
-        password: password
-      )
-
-      response user: user
-    end
-  end
-end
-```
-
-**Step 6: Use in your controller**
-
-```ruby
-# app/controllers/users_controller.rb
-class UsersController < ApplicationController
-  def create
-    result = Users::CreateUserOperation.call(user_params)
-
-    if result.success?
-      user = result.success.user
-      render json: { user: user }, status: :created
-    else
-      error = result.failure
-      case error
-      when Hanikamu::Operation::FormError
-        render json: { errors: error.errors.full_messages }, status: :unprocessable_entity
-      else
-        render json: { error: error.message }, status: :internal_server_error
-      end
-    end
-  end
-
-  private
-
-  def user_params
-    params.require(:user).permit(:email, :password)
-  end
-end
-```
-
-**Step 7: Configure for production**
+**Step 5: Production configuration**
 
 Set your Redis URL in production (Heroku, AWS, etc.):
 
@@ -284,71 +210,11 @@ Set your Redis URL in production (Heroku, AWS, etc.):
 heroku addons:create heroku-redis:mini
 # REDIS_URL is automatically set
 
-# Or set manually
+# Or set manually for other providers
 heroku config:set REDIS_URL=redis://your-redis-host:6379/0
 ```
 
-### Detailed Configuration Options
-
-If you need more control, create a detailed initializer:
-
-```ruby
-# config/initializers/hanikamu_operation.rb
-require 'redis-client'
-
-Hanikamu::Operation.configure do |config|
-  # Required: Redis client for distributed locking
-  config.redis_client = RedisClient.new(
-    url: ENV.fetch('REDIS_URL', 'redis://localhost:6379/0'),
-    reconnect_attempts: 3,
-    timeout: 1.0
-  )
-
-  # Optional: Customize Redlock settings (these are the defaults)
-  config.mutex_expire_milliseconds = 1500  # Lock TTL
-  config.redlock_retry_count = 6           # Number of retry attempts
-  config.redlock_retry_delay = 500         # Milliseconds between retries
-  config.redlock_retry_jitter = 50         # Random jitter to prevent thundering herd
-  config.redlock_timeout = 0.1             # Redis command timeout
-
-  # Optional: Add errors to whitelist (Redlock::LockError is always included by default)
-  config.whitelisted_errors = [CustomBusinessError]
-end
-```
-
-### Redis Setup by Environment
-
-**For Development (Docker Compose)**:
-
-```yaml
-# docker-compose.yml
-services:
-  redis:
-    image: redis:7-alpine
-    volumes:
-      - redis_data:/data
-    networks:
-      - app_network
-
-  app:
-    # ... your app config
-    environment:
-      REDIS_URL: redis://redis:6379/0
-    depends_on:
-      - redis
-    networks:
-      - app_network
-
-volumes:
-  redis_data:
-
-networks:
-  app_network:
-```
-
-**For Production**:
-
-Use a managed Redis service (AWS ElastiCache, Heroku Redis, Redis Labs, etc.) and set the `REDIS_URL` environment variable.
+For advanced configuration options, see the [Configuration Reference](#configuration-reference) section below.
 
 ## Usage
 
@@ -764,51 +630,67 @@ Operations validate at three distinct levels, each serving a specific purpose:
 
 ### FormError vs GuardError: Practical Examples
 
-**FormError Example** - Invalid or incorrect input arguments:
+Here's a complete example demonstrating the difference between form validations and guard conditions:
 
 ```ruby
-# Attempting to create a user with invalid inputs
-result = Users::CreateUserOperation.call(
-  email: "taken@example.com",
-  password: "short",
-  password_confirmation: "wrong"
-)
-# => Failure(#<Hanikamu::Operation::FormError: 
-#      Email has been taken, 
-#      Password is too short, 
-#      Password confirmation does not match password>)
+class TestOperation < Hanikamu::Operation
+  attribute :sentence, Types::String
 
-# Correcting the arguments allows success
-result = Users::CreateUserOperation.call(
-  email: "unique@example.com",
-  password: "securePassword123!",
-  password_confirmation: "securePassword123!"
-)
-# => Success(#<struct user=#<User id: 46, email: "unique@example.com">>)
+  # Form validation - checks input value format/content
+  validates :sentence, presence: true
+  validates :sentence, exclusion: { in: ["form_error"], message: "is not allowed" }
+
+  # Guard validation - checks business rules/state
+  guard do
+    delegates :sentence
+
+    validates :sentence, exclusion: { in: ["guard_error"], message: "is not allowed" }
+  end
+
+  within_mutex(:mutex_lock)
+  within_transaction(:base)
+
+  def execute
+    response(message: sentence.reverse)
+  end
+
+  def mutex_lock
+    self.class.name
+  end
+end
 ```
 
-**GuardError Example** - Valid arguments but invalid system state:
+**FormError Example** - Invalid input value triggers form validation:
 
 ```ruby
-# First attempt succeeds
-result = Users::CompleteUserOperation.call!(user_id: 46)
-# => Success(#<struct user=#<User id: 46, completed_at: "2025-11-26">>)
+# Form validation fails - input itself is invalid
+result = TestOperation.call(sentence: "form_error")
+# => Failure(#<Hanikamu::Operation::FormError: Sentence is not allowed>)
 
-# Second attempt fails due to state, even with valid arguments
-result = Users::CompleteUserOperation.call!(user_id: 46)
-# => Failure(#<Hanikamu::Operation::GuardError: User has already been completed>)
+# Correcting the input allows the operation to proceed
+result = TestOperation.call(sentence: "hello world")
+# => Success(#<struct message="dlrow olleh">)
+```
 
-# The arguments are still correct, but the operation cannot proceed
-# because the user's state has changed
+**GuardError Example** - Valid input but business rule violated:
+
+```ruby
+# Input passes form validation, but guard fails
+result = TestOperation.call(sentence: "guard_error")
+# => Failure(#<Hanikamu::Operation::GuardError: Sentence is not allowed>)
+
+# The input format is valid, but the business rule prevents execution
 ```
 
 **Type Error Example** - Wrong argument type:
 
 ```ruby
-# Passing wrong type raises immediately
-Users::CompleteUserOperation.call!(user_id: "not-a-number")
+# Passing wrong type raises immediately before any validations
+TestOperation.call!(sentence: 123)
 # => Raises Dry::Struct::Error
 ```
+
+**Key Insight**: Form validations check if the *input is correct*, while guards check if the *operation can proceed* given the current state.
 
 ### Using `.call!` (Raises Exceptions)
 
