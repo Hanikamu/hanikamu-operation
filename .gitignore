@@ -10,5 +10,8 @@
 # rspec failure tracking
 .rspec_status
 
+# Gemfile.lock
+/Gemfile.lock
+
 # Gem build artifacts
 hanikamu-operation-*.gem

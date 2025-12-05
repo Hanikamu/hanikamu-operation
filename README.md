@@ -62,6 +62,8 @@ Use `Hanikamu::Operation` (instead of plain `Hanikamu::Service`) when your busin
 
 **1. Install the gem**
 
+Requires Ruby 3.4.0 or later.
+
 ```ruby
 # Gemfile
 gem 'hanikamu-operation', '~> 0.1.2'
@@ -134,7 +136,6 @@ Requires Ruby 3.4.0 or later.
 ```ruby
 # Gemfile
 gem 'hanikamu-operation', '~> 0.1.2'
-gem 'redis-client', '~> 0.22'  # Required for distributed locking
 ```
 
 ```bash
