@@ -34,9 +34,10 @@ jobs:
       fail-fast: false
       matrix:
         ruby:
+          - '4.0'
           - '3.4'
         include:
-          - ruby: '3.4'
+          - ruby: '4.0'
             coverage: 'true'
     
     env:
