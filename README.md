@@ -66,7 +66,7 @@ Requires Ruby 3.4.0 or later.
 
 ```ruby
 # Gemfile
-gem 'hanikamu-operation', '~> 0.1.2'
+gem 'hanikamu-operation', '~> 0.2.0'
 ```
 
 ```bash
@@ -135,7 +135,7 @@ Requires Ruby 3.4.0 or later.
 
 ```ruby
 # Gemfile
-gem 'hanikamu-operation', '~> 0.1.2'
+gem 'hanikamu-operation', '~> 0.2.0'
 ```
 
 ```bash
@@ -331,6 +331,38 @@ def mutex_lock
   "user:#{user_id}:account:#{account_id}:transfer"
 end
 ```
+
+**Conditional locking with `:if` / `:unless`**:
+
+When the lock key is derived from an optional attribute, a `nil` value produces a degenerate shared key (e.g., `"Order$"`) that serializes all operations. Use `:if` or `:unless` to skip the Redis lock entirely when it isn't needed:
+
+```ruby
+class ProcessOrderOperation < Hanikamu::Operation
+  attribute :order_id?, Types::Params::Integer.optional
+
+  within_mutex(:mutex_lock, if: -> { order_id.present? })
+
+  def execute
+    # ...
+    response(successful: true)
+  end
+
+  def mutex_lock
+    "Order$#{order_id}"
+  end
+end
+```
+
+- When `order_id` is present, the lock is acquired on `"Order$42"` as usual.
+- When `order_id` is `nil`, no Redis round-trip occurs — the operation runs without a lock.
+
+The `:unless` option works inversely:
+
+```ruby
+within_mutex(:mutex_lock, unless: -> { order_id.nil? })
+```
+
+The lambda is evaluated via `instance_exec` on the operation instance, so it has access to all attributes and methods. Providing both `:if` and `:unless` raises `ArgumentError`.
 
 ### Database Transactions with `within_transaction`
 

@@ -14,6 +14,10 @@ console: ## build the image
 rspec: ## build the image
 	docker-compose run --rm app bash -c "bundle exec rspec"
 
+.PHONY: bundle
+bundle: ## install gems and rebuild image
+	docker-compose run --rm app bundle install
+	$(MAKE) build
 
 .PHONY: cops
 cops: ## build the image
