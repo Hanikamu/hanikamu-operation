@@ -6,7 +6,7 @@ module Hanikamu
   class Operation < Hanikamu::Service
     include ActiveModel::Validations
 
-    Error = Class.new(Hanikamu::Service::Error)
+    class Error < Hanikamu::Service::Error; end
 
     # Error classes
     class FormError < Hanikamu::Service::Error
@@ -91,9 +91,15 @@ module Hanikamu
       end
 
       # DSL methods
-      def within_mutex(lock_key, expire_milliseconds: nil)
+      def within_mutex(lock_key, expire_milliseconds: nil, if: nil, unless: nil)
+        if_condition = binding.local_variable_get(:if)
+        unless_condition = binding.local_variable_get(:unless)
+        validate_mutex_conditions!(if_condition, unless_condition)
+
         @_mutex_lock_key = lock_key
         @_mutex_expire_milliseconds = expire_milliseconds || Hanikamu::Operation.config.mutex_expire_milliseconds
+        @_mutex_if_condition = if_condition
+        @_mutex_unless_condition = unless_condition
       end
 
       def within_transaction(klass)
@@ -144,7 +150,24 @@ module Hanikamu
       end
       # rubocop:enable Metrics/MethodLength
 
-      attr_reader :_mutex_lock_key, :_mutex_expire_milliseconds, :_transaction_klass, :_block
+      attr_reader :_mutex_lock_key, :_mutex_expire_milliseconds, :_mutex_if_condition, :_mutex_unless_condition,
+                  :_transaction_klass, :_block
+
+      private
+
+      def validate_mutex_conditions!(if_condition, unless_condition)
+        if if_condition && unless_condition
+          raise ArgumentError, "Cannot specify both :if and :unless conditions for within_mutex"
+        end
+
+        if if_condition && !if_condition.respond_to?(:call)
+          raise ArgumentError, "within_mutex :if condition must be a callable (e.g. a Proc or lambda)"
+        end
+
+        return unless unless_condition && !unless_condition.respond_to?(:call)
+
+        raise ArgumentError, "within_mutex :unless condition must be a callable (e.g. a Proc or lambda)"
+      end
     end
 
     def call!(&block)
@@ -167,15 +190,11 @@ module Hanikamu
     end
 
     def within_mutex!(&)
-      return yield if _lock_key.nil?
+      return yield if self.class._mutex_lock_key.blank?
+      return yield unless _should_apply_mutex?
 
-      Hanikamu::Operation.redis_lock.lock!(_lock_key, self.class._mutex_expire_milliseconds, &)
-    end
-
-    def _lock_key
-      return if self.class._mutex_lock_key.blank?
-
-      public_send(self.class._mutex_lock_key)
+      lock_key = public_send(self.class._mutex_lock_key)
+      Hanikamu::Operation.redis_lock.lock!(lock_key, self.class._mutex_expire_milliseconds, &)
     end
 
     def within_transaction!(&)
@@ -185,6 +204,13 @@ module Hanikamu
     end
 
     private
+
+    def _should_apply_mutex?
+      return false if self.class._mutex_if_condition && !instance_exec(&self.class._mutex_if_condition)
+      return false if self.class._mutex_unless_condition && instance_exec(&self.class._mutex_unless_condition)
+
+      true
+    end
 
     def transaction_class
       return if self.class._transaction_klass.nil?

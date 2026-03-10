@@ -1,0 +1,30 @@
+---
+description: Development environment runs via docker-compose. Use Makefile targets instead of local commands.
+alwaysApply: true
+---
+
+# Docker-Compose Development Environment
+
+This project runs entirely inside Docker. Never run Ruby, Bundler, or Redis commands directly on the host.
+
+## Makefile Targets
+
+Use these instead of raw commands:
+
+| Task | Command |
+|------|---------|
+| Run tests | `make rspec` |
+| Run linter (auto-fix) | `make cops` |
+| Open a shell in the container | `make shell` |
+| Open an IRB console | `make console` |
+| Install gems & rebuild | `make bundle` |
+| Build the Docker image | `make build` |
+
+## Important
+
+- All `make` targets use `docker-compose run --rm app` under the hood.
+- Redis is provided as a linked service (`redis://redis:6379/15`) — no local Redis needed.
+- After changing the Gemfile or gemspec, run `make build` to reinstall dependencies.
+- Never use `bundle exec` directly on the host; always go through `make` or `make shell`.
+- Run `make` commands directly without `cd` — use the `working_directory` parameter instead.
+- After every code change, run `make rspec` to verify specs still pass before moving on.

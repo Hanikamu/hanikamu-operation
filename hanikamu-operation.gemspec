@@ -4,7 +4,7 @@ $LOAD_PATH.push File.expand_path("lib", __dir__)
 
 Gem::Specification.new do |spec|
   spec.name = "hanikamu-operation"
-  spec.version = "0.1.2"
+  spec.version = "0.2.0"
   spec.authors = ["Nicolai Seerup", "Alejandro Jimenez"]
 
   spec.summary = "Service objects with guards, distributed locks, and transactions"

@@ -114,17 +114,18 @@ RSpec.describe Hanikamu::Operation do
     it "maintains guard isolation during concurrent execution of different operation classes" do
       results = []
       threads = []
+      mutex = Mutex.new
 
       # Create two different operation classes
       5.times do
         threads << Thread.new do
           result = TestFail.call(id: "B") # Should succeed
-          results << { class: "TestFail", success: result.success? }
+          mutex.synchronize { results << { class: "TestFail", success: result.success? } }
         end
 
         threads << Thread.new do
           result = TestPass.call(id: "A", name: "Valid") # Should succeed
-          results << { class: "TestPass", success: result.success? }
+          mutex.synchronize { results << { class: "TestPass", success: result.success? } }
         end
       end
 
@@ -500,6 +501,122 @@ RSpec.describe Hanikamu::Operation do
         expect { subject }.not_to raise_error
 
         described_class.redis_lock.unlock(lock_info)
+      end
+    end
+
+    context "with :if condition" do
+      let(:operation_with_if) do
+        Class.new(Hanikamu::Operation) do
+          attribute :order_id?, Types::Params::Integer.optional
+
+          within_mutex(:mutex_lock, if: -> { !order_id.nil? })
+
+          def execute
+            response(successful: true)
+          end
+
+          def mutex_lock
+            "Order$#{order_id}"
+          end
+
+          define_singleton_method(:name) { "RSpecOperationWithIfCondition" }
+        end
+      end
+
+      it "acquires the lock when the :if condition is truthy" do
+        allow(described_class.redis_lock).to receive(:lock!).and_call_original
+        result = operation_with_if.call!(order_id: 42)
+
+        expect(result.successful).to be(true)
+        expect(described_class.redis_lock).to have_received(:lock!).with("Order$42", 1500)
+      end
+
+      it "skips the lock when the :if condition is falsy" do
+        allow(described_class.redis_lock).to receive(:lock!).and_call_original
+        result = operation_with_if.call!(order_id: nil)
+
+        expect(result.successful).to be(true)
+        expect(described_class.redis_lock).not_to have_received(:lock!)
+      end
+
+      it "does not call the lock key method when the condition skips" do
+        expect_any_instance_of(operation_with_if).not_to receive(:mutex_lock) # rubocop:disable RSpec/AnyInstance
+        operation_with_if.call!(order_id: nil)
+      end
+    end
+
+    context "with :unless condition" do
+      let(:operation_with_unless) do
+        Class.new(Hanikamu::Operation) do
+          attribute :order_id?, Types::Params::Integer.optional
+
+          within_mutex(:mutex_lock, unless: -> { order_id.nil? })
+
+          def execute
+            response(successful: true)
+          end
+
+          def mutex_lock
+            "Order$#{order_id}"
+          end
+
+          define_singleton_method(:name) { "RSpecOperationWithUnlessCondition" }
+        end
+      end
+
+      it "acquires the lock when the :unless condition is falsy" do
+        allow(described_class.redis_lock).to receive(:lock!).and_call_original
+        result = operation_with_unless.call!(order_id: 42)
+
+        expect(result.successful).to be(true)
+        expect(described_class.redis_lock).to have_received(:lock!).with("Order$42", 1500)
+      end
+
+      it "skips the lock when the :unless condition is truthy" do
+        allow(described_class.redis_lock).to receive(:lock!).and_call_original
+        result = operation_with_unless.call!(order_id: nil)
+
+        expect(result.successful).to be(true)
+        expect(described_class.redis_lock).not_to have_received(:lock!)
+      end
+    end
+
+    context "with no condition" do
+      it "always acquires the lock (backward-compatible)" do
+        allow(described_class.redis_lock).to receive(:lock!).and_call_original
+        subject
+
+        expect(described_class.redis_lock).to have_received(:lock!).with(lock_key, 1500)
+      end
+    end
+
+    context "with a non-callable :if condition" do
+      it "raises ArgumentError at class definition time" do
+        expect do
+          Class.new(Hanikamu::Operation) do
+            within_mutex(:mutex_lock, if: true)
+          end
+        end.to raise_error(ArgumentError, /must be a callable/)
+      end
+    end
+
+    context "with a non-callable :unless condition" do
+      it "raises ArgumentError at class definition time" do
+        expect do
+          Class.new(Hanikamu::Operation) do
+            within_mutex(:mutex_lock, unless: "not a proc")
+          end
+        end.to raise_error(ArgumentError, /must be a callable/)
+      end
+    end
+
+    context "with both :if and :unless" do
+      it "raises ArgumentError at class definition time" do
+        expect do
+          Class.new(Hanikamu::Operation) do
+            within_mutex(:mutex_lock, if: -> { true }, unless: -> { false })
+          end
+        end.to raise_error(ArgumentError, /Cannot specify both :if and :unless/)
       end
     end
   end
