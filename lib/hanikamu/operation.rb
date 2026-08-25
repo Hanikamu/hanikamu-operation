@@ -2,8 +2,7 @@
 
 module Hanikamu
   # :nodoc:
-  # rubocop:disable Metrics/ClassLength
-  class Operation < Hanikamu::Service
+  class Operation < Hanikamu::Service # rubocop:disable Metrics/ClassLength
     include ActiveModel::Validations
 
     class Error < Hanikamu::Service::Error; end
@@ -112,8 +111,7 @@ module Hanikamu
 
       # Define guard validations using a block
       # The block is evaluated in the context of a Guard class
-      # rubocop:disable Metrics/MethodLength
-      def guard(&block)
+      def guard(&block) # rubocop:disable Metrics/MethodLength
         return unless block
 
         # Thread-safe constant definition with mutex
@@ -148,7 +146,6 @@ module Hanikamu
           const_set(:Guard, guard_class)
         end
       end
-      # rubocop:enable Metrics/MethodLength
 
       attr_reader :_mutex_lock_key, :_mutex_expire_milliseconds, :_mutex_if_condition, :_mutex_unless_condition,
                   :_transaction_klass, :_block
@@ -193,8 +190,26 @@ module Hanikamu
       return yield if self.class._mutex_lock_key.blank?
       return yield unless _should_apply_mutex?
 
-      lock_key = public_send(self.class._mutex_lock_key)
-      Hanikamu::Operation.redis_lock.lock!(lock_key, self.class._mutex_expire_milliseconds, &)
+      # Snapshot the resolved key: it is documented as a String, and freezing a
+      # copy prevents operation code from mutating the same object mid-run and
+      # desyncing the reentrancy registry / lease bookkeeping (the cleanup would
+      # otherwise look up a different value and leak the entry).
+      lock_key = _stable_lock_key(public_send(self.class._mutex_lock_key))
+
+      # Reentrancy: a nested operation invoked synchronously (e.g. from a synchronous
+      # event handler, or a nested service call) while this context still holds this
+      # exact key would otherwise re-acquire it. Redlock is not reentrant, so the same
+      # execution context would block on itself until the TTL expires and then raise
+      # Redlock::LockError. Skip the re-acquire and run inline; only real acquisitions
+      # talk to Redis. Different fibers/threads/processes still contend normally.
+      #
+      # The bypass is gated on a *live* lease, not merely lexical nesting: we bypass
+      # only while the innermost lease this context holds on the key is still valid.
+      # Once it could have lapsed we fall through to a real acquire — which re-acquires
+      # the key if it is free, or raises Redlock::LockError if it was taken over.
+      return yield if _reentrant_lease_valid?(lock_key)
+
+      _acquire_and_run(lock_key, &)
     end
 
     def within_transaction!(&)
@@ -210,6 +225,74 @@ module Hanikamu
       return false if self.class._mutex_unless_condition && instance_exec(&self.class._mutex_unless_condition)
 
       true
+    end
+
+    # Acquire a real Redlock lease, push its deadline onto this context's stack for the
+    # key, run, then release. Nested reentrant calls ride on this lease without touching
+    # Redis; a nested call that finds the lease expired lands here again and takes a
+    # fresh, independent lease (its own stack frame), so it never contends with itself.
+    def _acquire_and_run(lock_key, &)
+      Hanikamu::Operation.redis_lock.lock!(lock_key, self.class._mutex_expire_milliseconds) do
+        _push_lease(lock_key)
+        begin
+          yield
+        ensure
+          _pop_lease(lock_key)
+        end
+      end
+    end
+
+    # A key is documented as a String; freeze a copy so it is a stable, immutable
+    # registry key regardless of what the operation does with the original object.
+    # Already-immutable values (frozen strings, symbols, integers) pass through.
+    def _stable_lock_key(key)
+      key.frozen? ? key : key.dup.freeze
+    end
+
+    # Per-key stack of monotonic deadlines (ms) for the real Redlock leases this context
+    # currently holds, scoped to the current execution context. Storage is
+    # `Thread.current[...]`, which in Ruby is fiber-local: this is the correct scope
+    # because a synchronous event cascade or nested call runs in the same fiber as the
+    # publishing operation, so it must be treated as the same holder. In the standard
+    # thread-per-request / thread-per-job model (Puma, Sidekiq) each thread has a single
+    # root fiber, so this is effectively per-thread. A separate job / request — or an
+    # independently scheduled fiber under a fiber scheduler — has its own stack and must
+    # still contend on Redis, which is exactly what we want (never bypass a lease held
+    # elsewhere). A stack (not a single value) is required so that a replacement lease
+    # taken after an outer lease expired restores the previous window when it exits.
+    def _lease_stacks
+      Thread.current[:hanikamu_operation_lease_stacks] ||= {}
+    end
+
+    def _monotonic_ms
+      Process.clock_gettime(Process::CLOCK_MONOTONIC, :millisecond)
+    end
+
+    # Bypass is valid only while the innermost lease this context holds on the key is
+    # still within its lease window (the top of the stack is the most recently acquired,
+    # hence longest-living, lease).
+    def _reentrant_lease_valid?(lock_key)
+      stack = _lease_stacks[lock_key]
+      return false unless stack&.any?
+
+      _monotonic_ms < stack.last
+    end
+
+    # Anchor the deadline to Redis's authoritative remaining TTL (already clock-drift
+    # adjusted by Redlock), captured right after acquisition, so the window never
+    # outlives the lease Redis actually granted — even if acquisition retried/took time.
+    def _push_lease(lock_key)
+      remaining = Hanikamu::Operation.redis_lock.get_remaining_ttl_for_resource(lock_key)
+      deadline = _monotonic_ms + (remaining || self.class._mutex_expire_milliseconds)
+      (_lease_stacks[lock_key] ||= []) << deadline
+    end
+
+    def _pop_lease(lock_key)
+      stack = _lease_stacks[lock_key]
+      return unless stack
+
+      stack.pop
+      _lease_stacks.delete(lock_key) if stack.empty?
     end
 
     def transaction_class
@@ -237,5 +320,4 @@ module Hanikamu
       raise Hanikamu::Operation::GuardError, @guard
     end
   end
-  # rubocop:enable Metrics/ClassLength
 end
