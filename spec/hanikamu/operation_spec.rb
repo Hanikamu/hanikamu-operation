@@ -34,8 +34,7 @@ RSpec.describe Hanikamu::Operation do
   end
 
   describe "guard isolation between operation classes" do
-    # rubocop:disable RSpec/MultipleExpectations
-    it "creates separate Guard constants for each operation class with independent validations" do
+    it "creates separate Guard constants for each operation class with independent validations" do # rubocop:disable RSpec/MultipleExpectations
       # TestFail should have its own Guard with the :id exclusion validation
       expect(TestFail.const_defined?(:Guard, false)).to be(true)
 
@@ -60,10 +59,8 @@ RSpec.describe Hanikamu::Operation do
       result = TestPass.call(id: "A", name: "Valid")
       expect(result).to be_success
     end
-    # rubocop:enable RSpec/MultipleExpectations
 
-    # rubocop:disable RSpec/ExampleLength
-    it "maintains separate guard validations for different operations regardless of execution context" do
+    it "maintains separate guard validations for different operations regardless of execution context" do # rubocop:disable RSpec/ExampleLength
       module TestModule
         class TransactionOp1 < Hanikamu::Operation
           attribute :id, Types::String
@@ -109,7 +106,6 @@ RSpec.describe Hanikamu::Operation do
       result2 = TestModule::TransactionOp2.call!(id: "forbidden1")
       expect(result2.value).to eq("op2_success")
     end
-    # rubocop:enable RSpec/ExampleLength
 
     it "maintains guard isolation during concurrent execution of different operation classes" do
       results = []
@@ -139,8 +135,7 @@ RSpec.describe Hanikamu::Operation do
       expect(results.count { |r| r[:class] == "TestPass" }).to eq(5)
     end
 
-    # rubocop:disable RSpec/ExampleLength
-    it "does not mix error messages from different operation guards" do
+    it "does not mix error messages from different operation guards" do # rubocop:disable RSpec/ExampleLength
       # Create two operations with different guard validations
       module TestModule
         class PortfolioOp < Hanikamu::Operation
@@ -192,10 +187,8 @@ RSpec.describe Hanikamu::Operation do
         expect(e.message).not_to include("Portfolio onboarding state")
       end
     end
-    # rubocop:enable RSpec/ExampleLength
 
-    # rubocop:disable RSpec/ExampleLength, RSpec/MultipleExpectations
-    it "maintains guard isolation when operations call other operations (Rails Event Store pattern)" do
+    it "maintains guard isolation when operations call other operations (Rails Event Store pattern)" do # rubocop:disable RSpec/ExampleLength,RSpec/MultipleExpectations
       # Simulate Rails Event Store / event handler pattern where operations call other operations
       module TestModule
         class PortfolioOnboardingOp < Hanikamu::Operation
@@ -285,10 +278,8 @@ RSpec.describe Hanikamu::Operation do
         expect(e.message).not_to include("Portfolio onboarding state")
       end
     end
-    # rubocop:enable RSpec/ExampleLength, RSpec/MultipleExpectations
 
-    # rubocop:disable RSpec/ExampleLength, RSpec/MultipleExpectations
-    it "maintains thread safety when simulating Sidekiq concurrent job execution" do
+    it "maintains thread safety when simulating Sidekiq concurrent job execution" do # rubocop:disable RSpec/ExampleLength,RSpec/MultipleExpectations
       # Simulate a Sidekiq job operation
       module TestModule
         class ProcessPaymentJob < Hanikamu::Operation
@@ -400,7 +391,6 @@ RSpec.describe Hanikamu::Operation do
         TestModule::SendEmailJob.call!(user_id: 1, template: "invalid")
       end.to raise_error(Hanikamu::Operation::GuardError, /must be welcome or confirmation/)
     end
-    # rubocop:enable RSpec/ExampleLength, RSpec/MultipleExpectations
   end
 
   describe "#within_mutex" do
@@ -617,6 +607,240 @@ RSpec.describe Hanikamu::Operation do
             within_mutex(:mutex_lock, if: -> { true }, unless: -> { false })
           end
         end.to raise_error(ArgumentError, /Cannot specify both :if and :unless/)
+      end
+    end
+
+    context "when reentrant (the same execution context already holds the key)" do
+      after do
+        Thread.current[:hanikamu_operation_lease_stacks] = nil
+      end
+
+      let(:effects) { [] }
+
+      # Acquires its lock, signals the current context's held-lease depth via
+      # `entered`, then blocks on `release` so the caller can hold the lock open while a
+      # second thread tries to acquire the same key. The TTL is set well above the
+      # Redlock retry window (~3s) so the lock does not expire out from under the
+      # contending thread mid-retry.
+      def build_blocking(entered, release)
+        Class.new(Hanikamu::Operation) do
+          attribute :lock_key, Types::String
+          within_mutex(:mutex_lock, expire_milliseconds: 6000)
+
+          define_method(:execute) do
+            entered << Thread.current[:hanikamu_operation_lease_stacks][lock_key].size
+            release.pop
+            response(ok: true)
+          end
+
+          define_method(:mutex_lock) { lock_key }
+          define_singleton_method(:name) { "RSpecBlockingReentrantOp" }
+        end
+      end
+
+      def build_inner(effects, should_raise: false)
+        Class.new(Hanikamu::Operation) do
+          attribute :lock_key, Types::String
+          within_mutex(:mutex_lock)
+
+          define_method(:execute) do
+            effects << :inner_ran
+            raise "inner boom" if should_raise
+
+            response(inner: true)
+          end
+
+          define_method(:mutex_lock) { lock_key }
+          define_singleton_method(:name) { "RSpecInnerReentrantOp" }
+        end
+      end
+
+      def build_outer(effects, inner_klass, inner_lock_key:)
+        Class.new(Hanikamu::Operation) do
+          attribute :lock_key, Types::String
+          within_mutex(:mutex_lock)
+
+          define_method(:execute) do
+            effects << :outer_ran
+            inner_klass.call!(lock_key: inner_lock_key)
+            response(outer: true)
+          end
+
+          define_method(:mutex_lock) { lock_key }
+          define_singleton_method(:name) { "RSpecOuterReentrantOp" }
+        end
+      end
+
+      it "acquires the Redis lock only once for nested same-key operations and runs both" do
+        inner = build_inner(effects)
+        outer = build_outer(effects, inner, inner_lock_key: lock_key)
+        allow(described_class.redis_lock).to receive(:lock!).and_call_original
+
+        result = outer.call!(lock_key: lock_key)
+
+        expect(result.outer).to be(true)
+        expect(effects).to eq(%i[outer_ran inner_ran])
+        expect(described_class.redis_lock).to have_received(:lock!).with(lock_key, 1500).once
+      end
+
+      it "acquires the Redis lock only once for deeply nested same-key operations" do
+        inner = build_inner(effects)
+        middle = build_outer(effects, inner, inner_lock_key: lock_key)
+        outer = build_outer(effects, middle, inner_lock_key: lock_key)
+        allow(described_class.redis_lock).to receive(:lock!).and_call_original
+
+        outer.call!(lock_key: lock_key)
+
+        expect(effects).to eq(%i[outer_ran outer_ran inner_ran])
+        expect(described_class.redis_lock).to have_received(:lock!).with(lock_key, 1500).once
+      end
+
+      it "preserves the inner operation's return value on the reentrant path" do
+        inner = build_inner(effects)
+        outer = Class.new(Hanikamu::Operation) do
+          attribute :lock_key, Types::String
+          within_mutex(:mutex_lock)
+
+          define_method(:execute) { inner.call!(lock_key: lock_key) }
+          define_method(:mutex_lock) { lock_key }
+          define_singleton_method(:name) { "RSpecOuterReturningInner" }
+        end
+
+        result = outer.call!(lock_key: lock_key)
+
+        expect(result.inner).to be(true)
+      end
+
+      it "acquires the Redis lock for each key when nested operations use different keys" do
+        inner_lock_key = SecureRandom.uuid
+        inner = build_inner(effects)
+        outer = build_outer(effects, inner, inner_lock_key: inner_lock_key)
+        allow(described_class.redis_lock).to receive(:lock!).and_call_original
+
+        outer.call!(lock_key: lock_key)
+
+        expect(described_class.redis_lock).to have_received(:lock!).with(lock_key, 1500)
+        expect(described_class.redis_lock).to have_received(:lock!).with(inner_lock_key, 1500)
+      end
+
+      it "does not share the lease stack across threads and still contends on Redis" do
+        entered = Queue.new
+        release = Queue.new
+        blocking = build_blocking(entered, release)
+
+        holder = Thread.new { blocking.call!(lock_key: lock_key) }
+        begin
+          # The holder is now inside execute with its own lease stack populated.
+          expect(entered.pop).to eq(1)
+
+          # A second thread must NOT see the holder's lease stack (proving the stack
+          # is per-context, not global) and must contend on Redis instead.
+          error = nil
+          Thread.new do
+            operation_with_mutex.call!(lock_key: lock_key)
+          rescue StandardError => e
+            error = e
+          end.join
+
+          expect(error).to be_a(Redlock::LockError)
+        ensure
+          release << :go
+          holder.join
+        end
+      end
+
+      it "leaves no lease-stack leak after a nested run completes" do
+        inner = build_inner(effects)
+        outer = build_outer(effects, inner, inner_lock_key: lock_key)
+
+        outer.call!(lock_key: lock_key)
+
+        expect(Thread.current[:hanikamu_operation_lease_stacks]).to be_empty
+      end
+
+      it "leaves no lease-stack leak after a nested run raises inside the inner block" do
+        inner = build_inner(effects, should_raise: true)
+        outer = build_outer(effects, inner, inner_lock_key: lock_key)
+
+        expect { outer.call!(lock_key: lock_key) }.to raise_error("inner boom")
+
+        expect(Thread.current[:hanikamu_operation_lease_stacks]).to be_empty
+      end
+
+      it "re-acquires a nested same-key call once the outer lease has expired instead of bypassing" do
+        inner = build_inner(effects)
+        outer = Class.new(Hanikamu::Operation) do
+          attribute :lock_key, Types::String
+          within_mutex(:mutex_lock, expire_milliseconds: 100)
+
+          define_method(:execute) do
+            sleep 0.25 # let this operation's own 100ms lease lapse
+            inner.call!(lock_key: lock_key)
+            response(ok: true)
+          end
+
+          define_method(:mutex_lock) { lock_key }
+          define_singleton_method(:name) { "RSpecExpiryOuterOp" }
+        end
+        allow(described_class.redis_lock).to receive(:lock!).and_call_original
+
+        outer.call!(lock_key: lock_key)
+
+        # Outer acquired for real (ttl 100); after expiry the nested call must NOT
+        # bypass but re-acquire for real (inner's default ttl 1500).
+        expect(described_class.redis_lock).to have_received(:lock!).with(lock_key, 100).once
+        expect(described_class.redis_lock).to have_received(:lock!).with(lock_key, 1500).once
+      end
+
+      it "lets a deeper same-key call bypass a replacement lease taken after the outer lease expired" do
+        inner = build_inner(effects)
+        middle = build_outer(effects, inner, inner_lock_key: lock_key)
+        # NOTE: unlike `build_outer`, this outer op records nothing in `effects` —
+        # only middle (:outer_ran) and inner (:inner_ran) do.
+        outer = Class.new(Hanikamu::Operation) do
+          attribute :lock_key, Types::String
+          within_mutex(:mutex_lock, expire_milliseconds: 100)
+
+          define_method(:execute) do
+            sleep 0.25 # let this operation's own 100ms lease lapse
+            middle.call!(lock_key: lock_key)
+            response(ok: true)
+          end
+
+          define_method(:mutex_lock) { lock_key }
+          define_singleton_method(:name) { "RSpecExpiryDeepOuterOp" }
+        end
+        allow(described_class.redis_lock).to receive(:lock!).and_call_original
+
+        result = outer.call!(lock_key: lock_key)
+
+        # Outer's 100ms lease lapsed, so `middle` takes a fresh real lease (ttl 1500);
+        # `inner` then rides that replacement lease inline instead of contending with it
+        # (the self-deadlock this stack-based bookkeeping guards against). Both run.
+        expect(result.ok).to be(true)
+        expect(effects).to eq(%i[outer_ran inner_ran])
+        expect(described_class.redis_lock).to have_received(:lock!).with(lock_key, 100).once
+        expect(described_class.redis_lock).to have_received(:lock!).with(lock_key, 1500).once
+      end
+
+      it "cleans up the lease stack even when the lock-key string is mutated during execute" do
+        op = Class.new(Hanikamu::Operation) do
+          within_mutex(:mutex_lock)
+
+          define_method(:execute) do
+            mutex_lock << "-mutated" # mutate the same String object the registry saw
+            response(ok: true)
+          end
+
+          def mutex_lock
+            @mutex_lock ||= "MutableKey$#{object_id}"
+          end
+
+          define_singleton_method(:name) { "RSpecMutableKeyOp" }
+        end
+
+        expect { op.call! }.not_to raise_error
+        expect(Thread.current[:hanikamu_operation_lease_stacks]).to be_empty
       end
     end
   end

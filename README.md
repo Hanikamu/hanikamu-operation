@@ -66,7 +66,7 @@ Requires Ruby 3.4.0 or later.
 
 ```ruby
 # Gemfile
-gem 'hanikamu-operation', '~> 0.2.0'
+gem 'hanikamu-operation', '~> 0.3.0'
 ```
 
 ```bash
@@ -135,7 +135,7 @@ Requires Ruby 3.4.0 or later.
 
 ```ruby
 # Gemfile
-gem 'hanikamu-operation', '~> 0.2.0'
+gem 'hanikamu-operation', '~> 0.3.0'
 ```
 
 ```bash
@@ -363,6 +363,59 @@ within_mutex(:mutex_lock, unless: -> { order_id.nil? })
 ```
 
 The lambda is evaluated via `instance_exec` on the operation instance, so it has access to all attributes and methods. Providing both `:if` and `:unless` raises `ArgumentError`.
+
+**Reentrancy (same execution context, same key)**:
+
+`within_mutex` is **reentrant within the same execution context**. If an operation holding a lock key synchronously calls another operation that locks the **same** key — for example through a synchronous callback/event handler, or a nested operation/service call — the inner acquire runs inline instead of trying to re-acquire the lock. Only the outermost holder talks to Redis.
+
+This matters because Redlock itself is **not** reentrant: without this, the same execution context would block on its own lock until the TTL expired and then raise `Redlock::LockError`, even though there is no concurrent request. Reentrancy removes that self-deadlock, matching the semantics of `Monitor`, Java's `ReentrantLock`, and ActiveRecord's nested transactions.
+
+> **Scope: fiber-local (effectively per-thread).** The lease bookkeeping is stored in `Thread.current[...]`, which in Ruby is *fiber-local*. In the standard thread-per-request / thread-per-job model (Puma, Sidekiq) each thread runs a single root fiber, so reentrancy behaves per-thread. Under a fiber scheduler (e.g. Falcon/async) or if you manually spawn a `Fiber` for the nested call, that separate fiber has its own lease stack and will contend on Redis normally — this is deliberate: it never bypasses a lock that a different, independently scheduled context might hold.
+
+```ruby
+class UpdateResourceOperation < Hanikamu::Operation
+  attribute :resource_id, Types::Integer
+
+  within_mutex(:mutex_lock)
+
+  def execute
+    resource = Resource.find(resource_id)
+    resource.touch!
+
+    # Runs inline under the lock already held by this execution context —
+    # no second Redis acquire, no self-deadlock.
+    SyncResourceOperation.call!(resource_id: resource_id)
+
+    response resource: resource
+  end
+
+  def mutex_lock
+    "Resource$#{resource_id}"
+  end
+end
+
+class SyncResourceOperation < Hanikamu::Operation
+  attribute :resource_id, Types::Integer
+
+  within_mutex(:mutex_lock) # same key as the caller
+
+  def execute
+    response(synced: true)
+  end
+
+  def mutex_lock
+    "Resource$#{resource_id}"
+  end
+end
+```
+
+**Scope and guarantees**:
+
+- **Same execution context only**: reentrancy is keyed to the current fiber (via a fiber-local lease stack), which in the usual thread-per-request / thread-per-job model means the current thread. A synchronous callback cascade or nested call runs in that same context, so it is treated as the same holder.
+- **Cross-context is unchanged**: a different thread, process, or independently scheduled fiber (e.g. a separate background job or web request) still contends on Redis and still raises `Redlock::LockError` when the key is held elsewhere.
+- **No configuration, no opt-out**: a same-context re-acquire of a held key can only self-deadlock, so there is no valid non-reentrant use case. Reentrancy is always on.
+- **Lease-aware, not just lexical**: the inline bypass only happens while a lease this context actually holds on the key is still live. Each real acquire records a deadline derived from Redis's own remaining TTL (already clock-drift adjusted), so the bypass window never outlives the lease Redis granted. If an operation runs past its mutex TTL (so the lease could have lapsed and been taken over), a nested same-key call does **not** run inline — it performs a real acquire, which re-locks the key if it is free (its own lease frame, so deeper nested calls still bypass safely) or raises `Redlock::LockError` if another context now owns it. Reentrancy therefore never weakens mutual exclusion beyond what Redlock itself guarantees.
+- **TTL is not refreshed** by nested reentrant calls — the outermost acquire's expiry still applies.
 
 ### Database Transactions with `within_transaction`
 
