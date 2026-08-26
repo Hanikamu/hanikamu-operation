@@ -920,6 +920,90 @@ RSpec.describe Hanikamu::Operation do
     end
   end
 
+  describe "attribute type errors" do
+    let(:typed_operation) do
+      Class.new(Hanikamu::Operation) do
+        attribute :name, Types::String
+        attribute :age, Types::Integer
+
+        def execute
+          response(successful: true)
+        end
+
+        define_singleton_method(:name) { "RSpecTypedOperation" }
+      end
+    end
+
+    # Dry::Struct failures are raised, not returned, so capture the error to inspect it.
+    def type_error_from
+      yield
+      nil
+    rescue Hanikamu::Operation::TypeError => e
+      e
+    end
+
+    context "when a required attribute is missing" do
+      it "raises a TypeError rather than a bare Dry::Struct::Error" do
+        expect { typed_operation.call!(age: 30) }.to raise_error(Hanikamu::Operation::TypeError)
+      end
+
+      it "exposes the missing attribute as the error key" do
+        expect(type_error_from { typed_operation.call!(age: 30) }.key).to eq(:name)
+      end
+
+      it "files the failure under that attribute in an ActiveModel errors object" do
+        error = type_error_from { typed_operation.call!(age: 30) }
+
+        expect(error.errors[:name]).to eq([":name is missing in Hash input"])
+      end
+
+      it "reports the missing attribute when called with no arguments at all" do
+        expect(type_error_from { typed_operation.call! }.key).to eq(:name)
+      end
+    end
+
+    context "when an attribute has the wrong type" do
+      it "exposes the offending attribute as the error key" do
+        error = type_error_from { typed_operation.call!(name: "Ada", age: "not-a-number") }
+
+        expect(error.key).to eq(:age)
+      end
+
+      it "keeps Dry's explanation of the type violation in the message" do
+        error = type_error_from { typed_operation.call!(name: "Ada", age: "not-a-number") }
+
+        expect(error.message).to include("has invalid type for :age")
+      end
+    end
+
+    it "returns a Failure carrying the TypeError when called without a bang" do
+      result = typed_operation.call(age: 30)
+
+      expect(result.failure).to be_a(Hanikamu::Operation::TypeError)
+    end
+
+    it "still runs normally when the attributes are valid" do
+      expect(typed_operation.call!(name: "Ada", age: 30).successful).to be(true)
+    end
+
+    context "when a Dry::Struct::Error originates somewhere other than this operation's schema" do
+      it "propagates the original error instead of misattributing it to an attribute" do
+        operation = Class.new(Hanikamu::Operation) do
+          attribute :name, Types::String
+
+          define_method(:execute) { raise Dry::Struct::Error, "raised from execute" }
+          define_singleton_method(:name) { "RSpecInnerRaisingOperation" }
+        end
+
+        expect { operation.call!(name: "Ada") }.to raise_error(Dry::Struct::Error, "raised from execute")
+      end
+
+      it "propagates the original error when the input is not even a Hash" do
+        expect { typed_operation.call!("not-a-hash") }.to raise_error(Dry::Struct::Error)
+      end
+    end
+  end
+
   describe "guard" do
     let(:operation_with_guard) do
       module TestModule
@@ -1160,6 +1244,52 @@ RSpec.describe Hanikamu::Operation do
 
         it "inherits from Hanikamu::Service::Error" do
           expect(subject).to be_a(Hanikamu::Service::Error)
+        end
+      end
+    end
+
+    describe Hanikamu::Operation::TypeError do
+      context "when initialized with a schema error carrying a key" do
+        subject { described_class.new(schema_error) }
+
+        let(:schema_error) { Dry::Types::MissingKeyError.new(:email) }
+
+        it "exposes the offending attribute as the key" do
+          expect(subject.key).to eq(:email)
+        end
+
+        it "keeps the underlying schema message" do
+          expect(subject.message).to eq(schema_error.message)
+        end
+
+        it "files the failure under that attribute in an ActiveModel errors object" do
+          expect(subject.errors[:email]).to eq([schema_error.message])
+        end
+
+        it "builds full messages from the attribute name" do
+          expect(subject.errors.full_messages).to eq(["Email :email is missing in Hash input"])
+        end
+
+        it "inherits from Hanikamu::Service::Error" do
+          expect(subject).to be_a(Hanikamu::Service::Error)
+        end
+      end
+
+      context "when initialized with a message" do
+        subject { described_class.new(error_message) }
+
+        let(:error_message) { "something went wrong" }
+
+        it "returns the correct error message" do
+          expect(subject.message).to eq(error_message)
+        end
+
+        it "falls back to :base as the key" do
+          expect(subject.key).to eq(:base)
+        end
+
+        it "files the failure under :base" do
+          expect(subject.errors[:base]).to eq([error_message])
         end
       end
     end

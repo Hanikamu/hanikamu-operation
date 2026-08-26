@@ -38,6 +38,22 @@ module Hanikamu
       end
     end
 
+    # Raised when the input attributes don't satisfy the operation's Dry::Struct
+    # schema. Dry::Struct reports the offending attribute inside its message only;
+    # this exposes it as `key` and through an ActiveModel errors object, so callers
+    # can render per-attribute failures the same way they do for FormError/GuardError.
+    class TypeError < Hanikamu::Service::Error
+      include ActiveModel::Validations
+
+      attr_reader :key
+
+      def initialize(error)
+        @key = error.respond_to?(:key) ? error.key : :base
+        super(error.is_a?(String) ? error : error.message)
+        errors.add(@key, message)
+      end
+    end
+
     class MissingBlockError < Hanikamu::Service::Error
     end
 
@@ -69,6 +85,16 @@ module Hanikamu
     end
 
     class << self
+      # Dry::Struct raises a bare Dry::Struct::Error that names the offending attribute
+      # only in its message. Re-raise it as a TypeError carrying that attribute, so
+      # attribute failures are consumable through the same errors interface as the
+      # other operation errors.
+      def call!(options = {}, &)
+        super
+      rescue Dry::Struct::Error => e
+        raise type_error_for(options, e)
+      end
+
       def redis_lock
         @redis_lock ||= begin
           unless config.redis_client
@@ -164,6 +190,20 @@ module Hanikamu
         return unless unless_condition && !unless_condition.respond_to?(:call)
 
         raise ArgumentError, "within_mutex :unless condition must be a callable (e.g. a Proc or lambda)"
+      end
+
+      # Replaying the input through the schema surfaces the typed error that carries
+      # the offending `key`, which Dry::Struct::Error itself does not expose. Anything
+      # else — a schema that now passes (the error came from deeper in the call, e.g.
+      # a nested operation) or input the schema can't even read as a Hash — keeps the
+      # original error rather than masking it with an unrelated one.
+      def type_error_for(options, original)
+        schema.call(options)
+        original
+      rescue Dry::Types::MissingKeyError, Dry::Types::SchemaError => e
+        TypeError.new(e)
+      rescue StandardError
+        original
       end
     end
 

@@ -66,7 +66,7 @@ Requires Ruby 3.4.0 or later.
 
 ```ruby
 # Gemfile
-gem 'hanikamu-operation', '~> 0.3.0'
+gem 'hanikamu-operation', '~> 0.4.0'
 ```
 
 ```bash
@@ -135,7 +135,7 @@ Requires Ruby 3.4.0 or later.
 
 ```ruby
 # Gemfile
-gem 'hanikamu-operation', '~> 0.3.0'
+gem 'hanikamu-operation', '~> 0.4.0'
 ```
 
 ```bash
@@ -686,10 +686,11 @@ end
 
 Operations validate at three distinct levels, each serving a specific purpose:
 
-**1. Type Validation (Dry::Struct::Error)**
-- Validates that input arguments are of the correct type
-- Raised automatically by dry-struct before the operation executes
-- Example: Passing a string when an integer is expected
+**1. Type Validation (Hanikamu::Operation::TypeError)**
+- Validates that input arguments are present and of the correct type
+- Raised by dry-struct before the operation executes, and re-raised as a `TypeError`
+- Carries the offending attribute as `key`, and an `errors` ActiveModel::Errors object keyed by it
+- Example: Passing a string when an integer is expected, or omitting a required attribute
 
 **2. Form Validation (Hanikamu::Operation::FormError)**
 - Validates input argument values and basic business rules
@@ -707,12 +708,16 @@ Operations validate at three distinct levels, each serving a specific purpose:
 
 | Error Class | When Raised | Contains |
 |-------------|-------------|----------|
-| `Dry::Struct::Error` | Type validation fails (wrong argument types) | Type error details |
+| `Hanikamu::Operation::TypeError` | Type validation fails (missing or wrong-typed arguments) | `key` - offending attribute, `errors` - ActiveModel::Errors object |
 | `Hanikamu::Operation::FormError` | Input validation fails (ActiveModel validations) | `errors` - ActiveModel::Errors object |
 | `Hanikamu::Operation::GuardError` | Guard validation fails (business rules/state) | `errors` - ActiveModel::Errors object |
 | `Hanikamu::Operation::MissingBlockError` | Block required but not provided | Standard error message |
 | `Hanikamu::Operation::ConfigurationError` | Redis client not configured | Configuration instructions |
 | `Redlock::LockError` | Cannot acquire distributed lock | Lock details (always whitelisted by default) |
+
+> **Note**: `Hanikamu::Operation::TypeError` shadows Ruby's built-in `::TypeError` inside operation
+> subclasses — a bare `TypeError` there resolves to this class through the ancestor chain. Write
+> `::TypeError` when you mean Ruby's.
 
 ### FormError vs GuardError: Practical Examples
 
@@ -773,8 +778,33 @@ result = TestOperation.call(sentence: "guard_error")
 ```ruby
 # Passing wrong type raises immediately before any validations
 TestOperation.call!(sentence: 123)
-# => Raises Dry::Struct::Error
+# => Raises Hanikamu::Operation::TypeError:
+#    123 (Integer) has invalid type for :sentence violates constraints (type?(String, 123) failed)
 ```
+
+Because the offending attribute is exposed the same way `FormError` and `GuardError` expose
+theirs, a missing or wrong-typed argument can be rendered next to the field that caused it:
+
+```ruby
+begin
+  TestOperation.call!(sentence: 123)
+rescue Hanikamu::Operation::TypeError => e
+  e.key                    # => :sentence
+  e.errors[:sentence]      # => ["123 (Integer) has invalid type for :sentence ..."]
+  e.errors.full_messages   # => ["Sentence 123 (Integer) has invalid type for :sentence ..."]
+end
+```
+
+An omitted attribute is reported the same way, keyed by the attribute that was left out:
+
+```ruby
+TestOperation.call({}).failure.key      # => :sentence
+TestOperation.call({}).failure.message  # => ":sentence is missing in Hash input"
+```
+
+Only failures from the operation's own schema are converted. A `Dry::Struct::Error` raised from
+inside `execute` — by a nested struct, for instance — propagates untouched, so it is never
+misreported as a problem with this operation's arguments.
 
 **Key Insight**: Form validations check if the *input is correct*, while guards check if the *operation can proceed* given the current state.
 
@@ -783,6 +813,10 @@ TestOperation.call!(sentence: 123)
 ```ruby
 begin
   result = CreatePayment.call!(user_id: 1, amount_cents: -100, payment_method_id: 'pm_123')
+rescue Hanikamu::Operation::TypeError => e
+  # An argument was missing or had the wrong type
+  puts e.key                # => :amount_cents
+  puts e.errors.full_messages
 rescue Hanikamu::Operation::FormError => e
   # Input validation failed
   puts e.message  # => "Amount cents must be greater than 0"
@@ -809,6 +843,8 @@ when Dry::Monads::Failure
   error = result.failure
   
   case error
+  when Hanikamu::Operation::TypeError
+    puts "Bad argument #{error.key}: #{error.errors.full_messages.join(', ')}"
   when Hanikamu::Operation::FormError
     puts "Validation errors: #{error.errors.full_messages.join(', ')}"
   when Hanikamu::Operation::GuardError
