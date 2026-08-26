@@ -797,9 +797,9 @@ TestOperation.call({}).failure.key      # => :sentence
 TestOperation.call({}).failure.message  # => ":sentence is missing in Hash input"
 ```
 
-Only failures from the operation's own schema are converted. A `Dry::Struct::Error` raised from
-inside `execute` — by a nested struct, for instance — propagates untouched, so it is never
-misreported as a problem with this operation's arguments.
+Only failures from the operation's own attributes are converted. A `Dry::Struct::Error` raised from
+inside `execute` — by a nested struct or service, for instance — propagates untouched, so it is
+never misreported as a problem with this operation's arguments.
 
 **Key Insight**: Form validations check if the *input is correct*, while guards check if the *operation can proceed* given the current state.
 

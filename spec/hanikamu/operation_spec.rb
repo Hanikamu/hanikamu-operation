@@ -986,6 +986,25 @@ RSpec.describe Hanikamu::Operation do
       expect(typed_operation.call!(name: "Ada", age: 30).successful).to be(true)
     end
 
+    it "builds the attributes once on a failing call, so type constructors don't run twice" do
+      invocations = 0
+      counted = Types::Integer.default { invocations += 1 }
+
+      operation = Class.new(Hanikamu::Operation) do
+        attribute :counted, counted
+        attribute :required, Types::String
+
+        def execute
+          response(successful: true)
+        end
+
+        define_singleton_method(:name) { "RSpecDefaultProcOperation" }
+      end
+
+      expect { operation.call!({}) }.to raise_error(Hanikamu::Operation::AttributeError)
+      expect(invocations).to eq(1)
+    end
+
     context "when a Dry::Struct::Error originates somewhere other than this operation's schema" do
       it "propagates the original error instead of misattributing it to an attribute" do
         operation = Class.new(Hanikamu::Operation) do
@@ -1000,6 +1019,28 @@ RSpec.describe Hanikamu::Operation do
 
       it "propagates the original error when the input is not even a Hash" do
         expect { typed_operation.call!("not-a-hash") }.to raise_error(Dry::Struct::Error)
+      end
+
+      # A nested service failing its own schema raises a Dry::Struct::Error whose cause is
+      # just as well-formed as one from this operation's attributes, so the two are only
+      # distinguishable by where they were raised.
+      it "propagates the original error when a nested service fails its own schema" do
+        nested_service = Class.new(Hanikamu::Service) do
+          attribute :required_thing, Types::String
+
+          def call!
+            :ok
+          end
+        end
+
+        operation = Class.new(Hanikamu::Operation) do
+          attribute :name, Types::String
+
+          define_method(:execute) { nested_service.call!({}) }
+          define_singleton_method(:name) { "RSpecNestingOperation" }
+        end
+
+        expect { operation.call!(name: "Ada") }.to raise_error(Dry::Struct::Error)
       end
     end
   end

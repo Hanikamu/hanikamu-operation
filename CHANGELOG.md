@@ -10,8 +10,8 @@
 - **Breaking Change**: `.call` now returns `Failure(Hanikamu::Operation::AttributeError)` where it
   previously returned `Failure(Dry::Struct::Error)`, and `.call!` raises the former. Code that
   rescues or matches on `Dry::Struct::Error` for *this operation's own* arguments needs updating.
-  A `Dry::Struct::Error` raised from anywhere else — inside `execute`, or by a nested struct —
-  still propagates untouched.
+  A `Dry::Struct::Error` raised from anywhere else — inside `execute`, or by a nested struct or
+  service — still propagates untouched.
 
 ## [0.1.0] - 2025-11-26
 

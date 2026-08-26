@@ -86,16 +86,6 @@ module Hanikamu
     end
 
     class << self
-      # Dry::Struct raises a bare Dry::Struct::Error that names the offending attribute
-      # only in its message. Re-raise it as an AttributeError carrying that attribute,
-      # so attribute failures are consumable through the same errors interface as the
-      # other operation errors.
-      def call!(options = {}, &)
-        super
-      rescue Dry::Struct::Error => e
-        raise attribute_error_for(options, e)
-      end
-
       def redis_lock
         @redis_lock ||= begin
           unless config.redis_client
@@ -193,18 +183,28 @@ module Hanikamu
         raise ArgumentError, "within_mutex :unless condition must be a callable (e.g. a Proc or lambda)"
       end
 
-      # Replaying the input through the schema surfaces the typed error that carries
-      # the offending `key`, which Dry::Struct::Error itself does not expose. Anything
-      # else — a schema that now passes (the error came from deeper in the call, e.g.
-      # a nested operation) or input the schema can't even read as a Hash — keeps the
-      # original error rather than masking it with an unrelated one.
-      def attribute_error_for(options, original)
-        schema.call(options)
-        original
-      rescue Dry::Types::MissingKeyError, Dry::Types::SchemaError => e
-        AttributeError.new(e)
-      rescue StandardError
-        original
+      # Converting here, at the point of construction, rather than around the whole
+      # call keeps the conversion scoped to this operation's own attributes. A
+      # Dry::Struct::Error raised anywhere else — inside `execute`, or by a nested
+      # struct or service, which produces one with an equally well-formed cause —
+      # stays attributed to whatever raised it.
+      def new(...)
+        super
+      rescue Dry::Struct::Error => e
+        raise attribute_error_for(e)
+      end
+
+      # Dry::Struct::Error names the offending attribute only inside its message, but
+      # Ruby retains the typed schema error that triggered it as the cause, and that
+      # one exposes the attribute as `key`. Input the schema cannot even read as a
+      # Hash raises a keyless CoercionError instead, leaving no attribute to blame.
+      def attribute_error_for(error)
+        case error.cause
+        when Dry::Types::MissingKeyError, Dry::Types::SchemaError
+          AttributeError.new(error.cause)
+        else
+          error
+        end
       end
     end
 
