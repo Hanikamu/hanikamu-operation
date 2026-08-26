@@ -38,6 +38,23 @@ module Hanikamu
       end
     end
 
+    # Raised when the input attributes don't satisfy the operation's Dry::Struct
+    # schema, either because one is missing or because its type doesn't match.
+    # Dry::Struct reports the offending attribute inside its message only; this
+    # exposes it as `key` and through an ActiveModel errors object, so callers can
+    # render per-attribute failures the same way they do for FormError/GuardError.
+    class AttributeError < Hanikamu::Service::Error
+      include ActiveModel::Validations
+
+      attr_reader :key
+
+      def initialize(error)
+        @key = error.respond_to?(:key) ? error.key : :base
+        super(error.is_a?(String) ? error : error.message)
+        errors.add(@key, message)
+      end
+    end
+
     class MissingBlockError < Hanikamu::Service::Error
     end
 
@@ -164,6 +181,30 @@ module Hanikamu
         return unless unless_condition && !unless_condition.respond_to?(:call)
 
         raise ArgumentError, "within_mutex :unless condition must be a callable (e.g. a Proc or lambda)"
+      end
+
+      # Converting here, at the point of construction, rather than around the whole
+      # call keeps the conversion scoped to this operation's own attributes. A
+      # Dry::Struct::Error raised anywhere else — inside `execute`, or by a nested
+      # struct or service, which produces one with an equally well-formed cause —
+      # stays attributed to whatever raised it.
+      def new(...)
+        super
+      rescue Dry::Struct::Error => e
+        raise attribute_error_for(e)
+      end
+
+      # Dry::Struct::Error names the offending attribute only inside its message, but
+      # Ruby retains the typed schema error that triggered it as the cause, and that
+      # one exposes the attribute as `key`. Input the schema cannot even read as a
+      # Hash raises a keyless CoercionError instead, leaving no attribute to blame.
+      def attribute_error_for(error)
+        case error.cause
+        when Dry::Types::MissingKeyError, Dry::Types::SchemaError
+          AttributeError.new(error.cause)
+        else
+          error
+        end
       end
     end
 

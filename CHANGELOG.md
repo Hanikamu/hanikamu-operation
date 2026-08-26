@@ -1,5 +1,18 @@
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-26
+
+- Attribute failures are now raised as `Hanikamu::Operation::AttributeError` instead of a bare
+  `Dry::Struct::Error`. Dry::Struct names the offending attribute only inside its message, so it
+  could not be rendered next to the field that caused it. `AttributeError` exposes that attribute
+  as `key` and through an `errors` ActiveModel::Errors object, matching the interface `FormError`
+  and `GuardError` already provide.
+- **Breaking Change**: `.call` now returns `Failure(Hanikamu::Operation::AttributeError)` where it
+  previously returned `Failure(Dry::Struct::Error)`, and `.call!` raises the former. Code that
+  rescues or matches on `Dry::Struct::Error` for *this operation's own* arguments needs updating.
+  A `Dry::Struct::Error` raised from anywhere else — inside `execute`, or by a nested struct or
+  service — still propagates untouched.
+
 ## [0.1.0] - 2025-11-26
 
 - Initial release
