@@ -231,15 +231,28 @@ module Hanikamu
     # key, run, then release. Nested reentrant calls ride on this lease without touching
     # Redis; a nested call that finds the lease expired lands here again and takes a
     # fresh, independent lease (its own stack frame), so it never contends with itself.
+    #
+    # Uses `lock` rather than `lock!` because only `lock` yields the lock_info, which
+    # carries Redlock's own drift-adjusted `:validity`. Reading the lease window from
+    # the acquire result costs no extra Redis round-trip and evaluates no Lua script —
+    # the latter matters because under `Redlock::Client.testing_mode = :bypass` the
+    # scripts are never loaded, so any EVALSHA raises NOSCRIPT on a cold Redis.
+    # `lock` returns `!!lock_info`, so the operation's own result is captured instead.
     def _acquire_and_run(lock_key, &)
-      Hanikamu::Operation.redis_lock.lock!(lock_key, self.class._mutex_expire_milliseconds) do
-        _push_lease(lock_key)
+      result = nil
+
+      Hanikamu::Operation.redis_lock.lock(lock_key, self.class._mutex_expire_milliseconds) do |lock_info|
+        raise Redlock::LockError, lock_key unless lock_info
+
+        _push_lease(lock_key, lock_info[:validity])
         begin
-          yield
+          result = yield
         ensure
           _pop_lease(lock_key)
         end
       end
+
+      result
     end
 
     # A key is documented as a String; freeze a copy so it is a stable, immutable
@@ -278,12 +291,11 @@ module Hanikamu
       _monotonic_ms < stack.last
     end
 
-    # Anchor the deadline to Redis's authoritative remaining TTL (already clock-drift
-    # adjusted by Redlock), captured right after acquisition, so the window never
-    # outlives the lease Redis actually granted — even if acquisition retried/took time.
-    def _push_lease(lock_key)
-      remaining = Hanikamu::Operation.redis_lock.get_remaining_ttl_for_resource(lock_key)
-      deadline = _monotonic_ms + (remaining || self.class._mutex_expire_milliseconds)
+    # Anchor the deadline to the lease Redlock actually granted: `:validity` is the TTL
+    # minus the time acquisition took minus Redlock's clock drift allowance, so the
+    # window never outlives the real lease even when the acquire was slow or retried.
+    def _push_lease(lock_key, validity_ms)
+      deadline = _monotonic_ms + (validity_ms || self.class._mutex_expire_milliseconds)
       (_lease_stacks[lock_key] ||= []) << deadline
     end
 

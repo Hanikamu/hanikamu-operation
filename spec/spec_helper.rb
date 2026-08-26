@@ -2,6 +2,9 @@
 
 require "hanikamu-operation"
 require "redis-client"
+# Opt-in Redlock test helper. Inert while `Redlock::Client.testing_mode` is nil, so
+# loading it here only enables specs that exercise the :bypass mode downstream apps use.
+require "redlock/testing"
 
 module Types
   include Dry::Types()
