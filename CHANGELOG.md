@@ -22,6 +22,17 @@
   Passing both `:if` and `:unless`, or a non-callable condition, raises `ArgumentError` at class
   definition time.
 
+## [0.3.1] - 2026-08-26
+
+- Fixed `RedisClient::NoScriptError: NOSCRIPT` raised on every `within_mutex` acquire when a host
+  application runs its test suite with `Redlock::Client.testing_mode = :bypass` against a Redis with
+  an empty script cache (typically a fresh CI container). 0.3.0 read the lease window with
+  `get_remaining_ttl_for_resource`, which evaluates a Lua script; `:bypass` also stubs out Redlock's
+  script loading, so the `EVALSHA` failed and Redlock's own recovery could not reload the script.
+  The lease window is now taken from the `:validity` that Redlock already returns when the lock is
+  acquired — no Lua script, and one fewer Redis round-trip per acquire. Lease-aware reentrancy
+  behaviour is unchanged.
+
 ## [0.3.0] - 2026-08-25
 
 - `within_mutex` is now reentrant within the same execution context (fiber-local, effectively

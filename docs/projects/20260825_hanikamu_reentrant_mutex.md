@@ -89,15 +89,24 @@ Add to the `private` section (see `lib/hanikamu/operation.rb` for the full set):
 # Real acquire: push this lease's deadline onto this context's per-key stack, run,
 # then pop. A nested call that finds the lease expired lands here again and takes a
 # fresh, independent lease (its own stack frame), so it never contends with itself.
+# Uses `lock` (not `lock!`) because only `lock` yields the lock_info carrying
+# Redlock's drift-adjusted `:validity`; `lock` returns `!!lock_info`, so the
+# operation's own result is captured and returned explicitly.
 def _acquire_and_run(lock_key, &)
-  Hanikamu::Operation.redis_lock.lock!(lock_key, self.class._mutex_expire_milliseconds) do
-    _push_lease(lock_key)
+  result = nil
+
+  Hanikamu::Operation.redis_lock.lock(lock_key, self.class._mutex_expire_milliseconds) do |lock_info|
+    raise Redlock::LockError, lock_key unless lock_info
+
+    _push_lease(lock_key, lock_info[:validity])
     begin
-      yield
+      result = yield
     ensure
       _pop_lease(lock_key)
     end
   end
+
+  result
 end
 
 def _stable_lock_key(key)
@@ -125,12 +134,11 @@ def _reentrant_lease_valid?(lock_key)
   _monotonic_ms < stack.last
 end
 
-# Anchor the deadline to Redis's authoritative remaining TTL (already clock-drift
-# adjusted by Redlock), captured right after acquisition, so the window never outlives
-# the lease Redis actually granted — even if acquisition retried/took time.
-def _push_lease(lock_key)
-  remaining = Hanikamu::Operation.redis_lock.get_remaining_ttl_for_resource(lock_key)
-  deadline = _monotonic_ms + (remaining || self.class._mutex_expire_milliseconds)
+# Anchor the deadline to the lease Redlock actually granted: `:validity` is the TTL
+# minus acquisition time minus Redlock's clock drift allowance, so the window never
+# outlives the real lease even when the acquire was slow or retried.
+def _push_lease(lock_key, validity_ms)
+  deadline = _monotonic_ms + (validity_ms || self.class._mutex_expire_milliseconds)
   (_lease_stacks[lock_key] ||= []) << deadline
 end
 
@@ -145,15 +153,19 @@ end
 
 ### Why this is correct / safe
 
-- **Return value preserved:** `redis_lock.lock!` returns the block's value; `_acquire_and_run`
-  returns the value of `yield` (the `ensure` around `_pop_lease` doesn't override it), and the bypass
-  path is a plain `yield`. Operation responses flow through unchanged.
-- **Exception-safe:** a lease is only pushed once we're inside the `lock!` block, and the `ensure`
-  always pops it. If `lock!` itself fails to acquire (real contention from another context), the
-  block never runs, so nothing is pushed and nothing leaks.
+- **Return value preserved:** `_acquire_and_run` captures the value of `yield` and returns it (the
+  `ensure` around `_pop_lease` doesn't override it, and `lock`'s own `!!lock_info` return is
+  discarded), and the bypass path is a plain `yield`. Operation responses flow through unchanged.
+- **Exception-safe:** a lease is only pushed once acquisition succeeded, and the `ensure` always pops
+  it. If the acquire fails (real contention from another context), `lock_info` is falsy, we raise
+  `Redlock::LockError` before pushing, so nothing leaks.
+- **No Lua script on the mutex path:** the lease window comes from the `:validity` Redlock returns at
+  acquire time, not from a follow-up TTL query. That avoids a second Redis round-trip and, crucially,
+  works under `Redlock::Client.testing_mode = :bypass`, which stubs out script loading — a
+  script-based TTL read raises `NOSCRIPT` there on a cold Redis (see 0.3.1 in the CHANGELOG).
 - **Lease-aware, not merely lexical:** the bypass is gated on a live lease — each real acquire pushes
-  a deadline derived from Redis's own remaining TTL (already clock-drift adjusted), captured right
-  after acquisition, so the window never outlives the lease Redis granted (even under a slow/retried
+  a deadline derived from Redlock's drift-adjusted `:validity` (TTL minus the time acquisition took),
+  so the window never outlives the lease Redis granted (even under a slow/retried
   acquire). If an operation outlives its mutex TTL, a nested same-key call re-acquires for real as
   its own stack frame instead of running inline — re-locking a free key (deeper nested calls then
   bypass *that* replacement lease, avoiding a fresh self-deadlock) or raising `Redlock::LockError` on
@@ -206,6 +218,9 @@ The suite already uses a **real Redis** (`described_class.redis_lock`). Cover:
    the live replacement lease, not the expired outer deadline.
 8. **Mutable key snapshot.** An op whose lock-key method returns a String that `execute` mutates
    still cleans up the stack (no leaked entry under the pre-mutation value).
+9. **Redlock `:bypass` on a cold Redis.** With `Redlock::Client.testing_mode = :bypass` and the
+   script cache flushed, a nested same-key run must complete without raising — proving the mutex
+   path evaluates no Lua script (regression guard for the 0.3.1 `NOSCRIPT` fix).
 
 ---
 

@@ -415,18 +415,18 @@ RSpec.describe Hanikamu::Operation do
       end
     end
 
-    # Unit tests will stub lock! locally; integration tests use real Redis
+    # Unit tests will stub lock locally; integration tests use real Redis
 
     it "runs operation successfully" do
-      allow(described_class.redis_lock).to receive(:lock!).and_call_original
+      allow(described_class.redis_lock).to receive(:lock).and_call_original
       expect(subject.successful).to be(true)
     end
 
     it "calls the redis lock with correct arguments" do
-      allow(described_class.redis_lock).to receive(:lock!).and_call_original
+      allow(described_class.redis_lock).to receive(:lock).and_call_original
       subject
 
-      expect(described_class.redis_lock).to have_received(:lock!).with(lock_key, 1500)
+      expect(described_class.redis_lock).to have_received(:lock).with(lock_key, 1500)
     end
 
     context "with custom expire_milliseconds" do
@@ -449,10 +449,10 @@ RSpec.describe Hanikamu::Operation do
       end
 
       it "calls the redis lock with custom expire_milliseconds" do
-        allow(described_class.redis_lock).to receive(:lock!).and_call_original
+        allow(described_class.redis_lock).to receive(:lock).and_call_original
         subject
 
-        expect(described_class.redis_lock).to have_received(:lock!).with(lock_key, 500)
+        expect(described_class.redis_lock).to have_received(:lock).with(lock_key, 500)
       end
     end
 
@@ -514,19 +514,19 @@ RSpec.describe Hanikamu::Operation do
       end
 
       it "acquires the lock when the :if condition is truthy" do
-        allow(described_class.redis_lock).to receive(:lock!).and_call_original
+        allow(described_class.redis_lock).to receive(:lock).and_call_original
         result = operation_with_if.call!(order_id: 42)
 
         expect(result.successful).to be(true)
-        expect(described_class.redis_lock).to have_received(:lock!).with("Order$42", 1500)
+        expect(described_class.redis_lock).to have_received(:lock).with("Order$42", 1500)
       end
 
       it "skips the lock when the :if condition is falsy" do
-        allow(described_class.redis_lock).to receive(:lock!).and_call_original
+        allow(described_class.redis_lock).to receive(:lock).and_call_original
         result = operation_with_if.call!(order_id: nil)
 
         expect(result.successful).to be(true)
-        expect(described_class.redis_lock).not_to have_received(:lock!)
+        expect(described_class.redis_lock).not_to have_received(:lock)
       end
 
       it "does not call the lock key method when the condition skips" do
@@ -555,28 +555,28 @@ RSpec.describe Hanikamu::Operation do
       end
 
       it "acquires the lock when the :unless condition is falsy" do
-        allow(described_class.redis_lock).to receive(:lock!).and_call_original
+        allow(described_class.redis_lock).to receive(:lock).and_call_original
         result = operation_with_unless.call!(order_id: 42)
 
         expect(result.successful).to be(true)
-        expect(described_class.redis_lock).to have_received(:lock!).with("Order$42", 1500)
+        expect(described_class.redis_lock).to have_received(:lock).with("Order$42", 1500)
       end
 
       it "skips the lock when the :unless condition is truthy" do
-        allow(described_class.redis_lock).to receive(:lock!).and_call_original
+        allow(described_class.redis_lock).to receive(:lock).and_call_original
         result = operation_with_unless.call!(order_id: nil)
 
         expect(result.successful).to be(true)
-        expect(described_class.redis_lock).not_to have_received(:lock!)
+        expect(described_class.redis_lock).not_to have_received(:lock)
       end
     end
 
     context "with no condition" do
       it "always acquires the lock (backward-compatible)" do
-        allow(described_class.redis_lock).to receive(:lock!).and_call_original
+        allow(described_class.redis_lock).to receive(:lock).and_call_original
         subject
 
-        expect(described_class.redis_lock).to have_received(:lock!).with(lock_key, 1500)
+        expect(described_class.redis_lock).to have_received(:lock).with(lock_key, 1500)
       end
     end
 
@@ -674,25 +674,25 @@ RSpec.describe Hanikamu::Operation do
       it "acquires the Redis lock only once for nested same-key operations and runs both" do
         inner = build_inner(effects)
         outer = build_outer(effects, inner, inner_lock_key: lock_key)
-        allow(described_class.redis_lock).to receive(:lock!).and_call_original
+        allow(described_class.redis_lock).to receive(:lock).and_call_original
 
         result = outer.call!(lock_key: lock_key)
 
         expect(result.outer).to be(true)
         expect(effects).to eq(%i[outer_ran inner_ran])
-        expect(described_class.redis_lock).to have_received(:lock!).with(lock_key, 1500).once
+        expect(described_class.redis_lock).to have_received(:lock).with(lock_key, 1500).once
       end
 
       it "acquires the Redis lock only once for deeply nested same-key operations" do
         inner = build_inner(effects)
         middle = build_outer(effects, inner, inner_lock_key: lock_key)
         outer = build_outer(effects, middle, inner_lock_key: lock_key)
-        allow(described_class.redis_lock).to receive(:lock!).and_call_original
+        allow(described_class.redis_lock).to receive(:lock).and_call_original
 
         outer.call!(lock_key: lock_key)
 
         expect(effects).to eq(%i[outer_ran outer_ran inner_ran])
-        expect(described_class.redis_lock).to have_received(:lock!).with(lock_key, 1500).once
+        expect(described_class.redis_lock).to have_received(:lock).with(lock_key, 1500).once
       end
 
       it "preserves the inner operation's return value on the reentrant path" do
@@ -715,12 +715,12 @@ RSpec.describe Hanikamu::Operation do
         inner_lock_key = SecureRandom.uuid
         inner = build_inner(effects)
         outer = build_outer(effects, inner, inner_lock_key: inner_lock_key)
-        allow(described_class.redis_lock).to receive(:lock!).and_call_original
+        allow(described_class.redis_lock).to receive(:lock).and_call_original
 
         outer.call!(lock_key: lock_key)
 
-        expect(described_class.redis_lock).to have_received(:lock!).with(lock_key, 1500)
-        expect(described_class.redis_lock).to have_received(:lock!).with(inner_lock_key, 1500)
+        expect(described_class.redis_lock).to have_received(:lock).with(lock_key, 1500)
+        expect(described_class.redis_lock).to have_received(:lock).with(inner_lock_key, 1500)
       end
 
       it "does not share the lease stack across threads and still contends on Redis" do
@@ -782,14 +782,14 @@ RSpec.describe Hanikamu::Operation do
           define_method(:mutex_lock) { lock_key }
           define_singleton_method(:name) { "RSpecExpiryOuterOp" }
         end
-        allow(described_class.redis_lock).to receive(:lock!).and_call_original
+        allow(described_class.redis_lock).to receive(:lock).and_call_original
 
         outer.call!(lock_key: lock_key)
 
         # Outer acquired for real (ttl 100); after expiry the nested call must NOT
         # bypass but re-acquire for real (inner's default ttl 1500).
-        expect(described_class.redis_lock).to have_received(:lock!).with(lock_key, 100).once
-        expect(described_class.redis_lock).to have_received(:lock!).with(lock_key, 1500).once
+        expect(described_class.redis_lock).to have_received(:lock).with(lock_key, 100).once
+        expect(described_class.redis_lock).to have_received(:lock).with(lock_key, 1500).once
       end
 
       it "lets a deeper same-key call bypass a replacement lease taken after the outer lease expired" do
@@ -810,7 +810,7 @@ RSpec.describe Hanikamu::Operation do
           define_method(:mutex_lock) { lock_key }
           define_singleton_method(:name) { "RSpecExpiryDeepOuterOp" }
         end
-        allow(described_class.redis_lock).to receive(:lock!).and_call_original
+        allow(described_class.redis_lock).to receive(:lock).and_call_original
 
         result = outer.call!(lock_key: lock_key)
 
@@ -819,8 +819,8 @@ RSpec.describe Hanikamu::Operation do
         # (the self-deadlock this stack-based bookkeeping guards against). Both run.
         expect(result.ok).to be(true)
         expect(effects).to eq(%i[outer_ran inner_ran])
-        expect(described_class.redis_lock).to have_received(:lock!).with(lock_key, 100).once
-        expect(described_class.redis_lock).to have_received(:lock!).with(lock_key, 1500).once
+        expect(described_class.redis_lock).to have_received(:lock).with(lock_key, 100).once
+        expect(described_class.redis_lock).to have_received(:lock).with(lock_key, 1500).once
       end
 
       it "cleans up the lease stack even when the lock-key string is mutated during execute" do
@@ -841,6 +841,30 @@ RSpec.describe Hanikamu::Operation do
 
         expect { op.call! }.not_to raise_error
         expect(Thread.current[:hanikamu_operation_lease_stacks]).to be_empty
+      end
+
+      # Downstream test suites commonly stub Redlock out with `testing_mode = :bypass`,
+      # which also no-ops Redlock's `load_scripts`. On a cold Redis (a fresh CI
+      # container with an empty script cache) any EVALSHA then fails with NOSCRIPT and
+      # Redlock's own self-heal cannot recover, because reloading is exactly what
+      # :bypass disabled. The mutex path must therefore never evaluate a Lua script.
+      context "with Redlock's :bypass testing mode and a cold Redis script cache" do
+        around do |example|
+          Redlock::Client.testing_mode = :bypass
+          example.run
+        ensure
+          Redlock::Client.testing_mode = nil
+        end
+
+        before { described_class.config.redis_client.call("SCRIPT", "FLUSH") }
+
+        it "acquires and re-enters without evaluating a Lua script" do
+          inner = build_inner(effects)
+          outer = build_outer(effects, inner, inner_lock_key: lock_key)
+
+          expect { outer.call!(lock_key: lock_key) }.not_to raise_error
+          expect(effects).to eq(%i[outer_ran inner_ran])
+        end
       end
     end
   end
