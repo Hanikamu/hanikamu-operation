@@ -39,10 +39,11 @@ module Hanikamu
     end
 
     # Raised when the input attributes don't satisfy the operation's Dry::Struct
-    # schema. Dry::Struct reports the offending attribute inside its message only;
-    # this exposes it as `key` and through an ActiveModel errors object, so callers
-    # can render per-attribute failures the same way they do for FormError/GuardError.
-    class TypeError < Hanikamu::Service::Error
+    # schema, either because one is missing or because its type doesn't match.
+    # Dry::Struct reports the offending attribute inside its message only; this
+    # exposes it as `key` and through an ActiveModel errors object, so callers can
+    # render per-attribute failures the same way they do for FormError/GuardError.
+    class AttributeError < Hanikamu::Service::Error
       include ActiveModel::Validations
 
       attr_reader :key
@@ -86,13 +87,13 @@ module Hanikamu
 
     class << self
       # Dry::Struct raises a bare Dry::Struct::Error that names the offending attribute
-      # only in its message. Re-raise it as a TypeError carrying that attribute, so
-      # attribute failures are consumable through the same errors interface as the
+      # only in its message. Re-raise it as an AttributeError carrying that attribute,
+      # so attribute failures are consumable through the same errors interface as the
       # other operation errors.
       def call!(options = {}, &)
         super
       rescue Dry::Struct::Error => e
-        raise type_error_for(options, e)
+        raise attribute_error_for(options, e)
       end
 
       def redis_lock
@@ -197,11 +198,11 @@ module Hanikamu
       # else — a schema that now passes (the error came from deeper in the call, e.g.
       # a nested operation) or input the schema can't even read as a Hash — keeps the
       # original error rather than masking it with an unrelated one.
-      def type_error_for(options, original)
+      def attribute_error_for(options, original)
         schema.call(options)
         original
       rescue Dry::Types::MissingKeyError, Dry::Types::SchemaError => e
-        TypeError.new(e)
+        AttributeError.new(e)
       rescue StandardError
         original
       end

@@ -935,51 +935,51 @@ RSpec.describe Hanikamu::Operation do
     end
 
     # Dry::Struct failures are raised, not returned, so capture the error to inspect it.
-    def type_error_from
+    def attribute_error_from
       yield
       nil
-    rescue Hanikamu::Operation::TypeError => e
+    rescue Hanikamu::Operation::AttributeError => e
       e
     end
 
     context "when a required attribute is missing" do
-      it "raises a TypeError rather than a bare Dry::Struct::Error" do
-        expect { typed_operation.call!(age: 30) }.to raise_error(Hanikamu::Operation::TypeError)
+      it "raises an AttributeError rather than a bare Dry::Struct::Error" do
+        expect { typed_operation.call!(age: 30) }.to raise_error(Hanikamu::Operation::AttributeError)
       end
 
       it "exposes the missing attribute as the error key" do
-        expect(type_error_from { typed_operation.call!(age: 30) }.key).to eq(:name)
+        expect(attribute_error_from { typed_operation.call!(age: 30) }.key).to eq(:name)
       end
 
       it "files the failure under that attribute in an ActiveModel errors object" do
-        error = type_error_from { typed_operation.call!(age: 30) }
+        error = attribute_error_from { typed_operation.call!(age: 30) }
 
         expect(error.errors[:name]).to eq([":name is missing in Hash input"])
       end
 
       it "reports the missing attribute when called with no arguments at all" do
-        expect(type_error_from { typed_operation.call! }.key).to eq(:name)
+        expect(attribute_error_from { typed_operation.call! }.key).to eq(:name)
       end
     end
 
     context "when an attribute has the wrong type" do
       it "exposes the offending attribute as the error key" do
-        error = type_error_from { typed_operation.call!(name: "Ada", age: "not-a-number") }
+        error = attribute_error_from { typed_operation.call!(name: "Ada", age: "not-a-number") }
 
         expect(error.key).to eq(:age)
       end
 
       it "keeps Dry's explanation of the type violation in the message" do
-        error = type_error_from { typed_operation.call!(name: "Ada", age: "not-a-number") }
+        error = attribute_error_from { typed_operation.call!(name: "Ada", age: "not-a-number") }
 
         expect(error.message).to include("has invalid type for :age")
       end
     end
 
-    it "returns a Failure carrying the TypeError when called without a bang" do
+    it "returns a Failure carrying the AttributeError when called without a bang" do
       result = typed_operation.call(age: 30)
 
-      expect(result.failure).to be_a(Hanikamu::Operation::TypeError)
+      expect(result.failure).to be_a(Hanikamu::Operation::AttributeError)
     end
 
     it "still runs normally when the attributes are valid" do
@@ -1248,7 +1248,7 @@ RSpec.describe Hanikamu::Operation do
       end
     end
 
-    describe Hanikamu::Operation::TypeError do
+    describe Hanikamu::Operation::AttributeError do
       context "when initialized with a schema error carrying a key" do
         subject { described_class.new(schema_error) }
 

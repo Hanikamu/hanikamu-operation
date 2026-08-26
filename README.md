@@ -686,9 +686,9 @@ end
 
 Operations validate at three distinct levels, each serving a specific purpose:
 
-**1. Type Validation (Hanikamu::Operation::TypeError)**
+**1. Attribute Validation (Hanikamu::Operation::AttributeError)**
 - Validates that input arguments are present and of the correct type
-- Raised by dry-struct before the operation executes, and re-raised as a `TypeError`
+- Raised by dry-struct before the operation executes, and re-raised as an `AttributeError`
 - Carries the offending attribute as `key`, and an `errors` ActiveModel::Errors object keyed by it
 - Example: Passing a string when an integer is expected, or omitting a required attribute
 
@@ -708,17 +708,12 @@ Operations validate at three distinct levels, each serving a specific purpose:
 
 | Error Class | When Raised | Contains |
 |-------------|-------------|----------|
-| `Hanikamu::Operation::TypeError` | Type validation fails (missing or wrong-typed arguments) | `key` - offending attribute, `errors` - ActiveModel::Errors object |
+| `Hanikamu::Operation::AttributeError` | Type validation fails (missing or wrong-typed arguments) | `key` - offending attribute, `errors` - ActiveModel::Errors object |
 | `Hanikamu::Operation::FormError` | Input validation fails (ActiveModel validations) | `errors` - ActiveModel::Errors object |
 | `Hanikamu::Operation::GuardError` | Guard validation fails (business rules/state) | `errors` - ActiveModel::Errors object |
 | `Hanikamu::Operation::MissingBlockError` | Block required but not provided | Standard error message |
 | `Hanikamu::Operation::ConfigurationError` | Redis client not configured | Configuration instructions |
 | `Redlock::LockError` | Cannot acquire distributed lock | Lock details (always whitelisted by default) |
-
-> **Note**: `Hanikamu::Operation::TypeError` shadows Ruby's built-in `::TypeError` inside operation
-> subclasses — a bare `TypeError` there resolves to this class through the ancestor chain. Write
-> `::TypeError` when you mean Ruby's.
-
 ### FormError vs GuardError: Practical Examples
 
 Here's a complete example demonstrating the difference between form validations and guard conditions:
@@ -773,12 +768,12 @@ result = TestOperation.call(sentence: "guard_error")
 # The input format is valid, but the business rule prevents execution
 ```
 
-**Type Error Example** - Wrong argument type:
+**Attribute Error Example** - Wrong argument type:
 
 ```ruby
 # Passing wrong type raises immediately before any validations
 TestOperation.call!(sentence: 123)
-# => Raises Hanikamu::Operation::TypeError:
+# => Raises Hanikamu::Operation::AttributeError:
 #    123 (Integer) has invalid type for :sentence violates constraints (type?(String, 123) failed)
 ```
 
@@ -788,7 +783,7 @@ theirs, a missing or wrong-typed argument can be rendered next to the field that
 ```ruby
 begin
   TestOperation.call!(sentence: 123)
-rescue Hanikamu::Operation::TypeError => e
+rescue Hanikamu::Operation::AttributeError => e
   e.key                    # => :sentence
   e.errors[:sentence]      # => ["123 (Integer) has invalid type for :sentence ..."]
   e.errors.full_messages   # => ["Sentence 123 (Integer) has invalid type for :sentence ..."]
@@ -813,7 +808,7 @@ misreported as a problem with this operation's arguments.
 ```ruby
 begin
   result = CreatePayment.call!(user_id: 1, amount_cents: -100, payment_method_id: 'pm_123')
-rescue Hanikamu::Operation::TypeError => e
+rescue Hanikamu::Operation::AttributeError => e
   # An argument was missing or had the wrong type
   puts e.key                # => :amount_cents
   puts e.errors.full_messages
@@ -843,7 +838,7 @@ when Dry::Monads::Failure
   error = result.failure
   
   case error
-  when Hanikamu::Operation::TypeError
+  when Hanikamu::Operation::AttributeError
     puts "Bad argument #{error.key}: #{error.errors.full_messages.join(', ')}"
   when Hanikamu::Operation::FormError
     puts "Validation errors: #{error.errors.full_messages.join(', ')}"
